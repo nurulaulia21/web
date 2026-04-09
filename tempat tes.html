@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Architect Dual Hand</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
+        canvas { transform: scaleX(-1); position: absolute; top: 0; left: 0; z-index: 10; }
+        video { transform: scaleX(-1); opacity: 0.1; width: 100%; height: 100%; object-fit: cover; }
+        .ui { position: fixed; top: 20px; left: 20px; z-index: 100; color: #00ffcc; background: rgba(0,0,0,0.5); padding: 15px; border-radius: 10px; border: 1px solid #00ffcc; }
+        .instruction { position: fixed; bottom: 20px; width: 100%; text-align: center; color: #fff; z-index: 100; font-size: 0.9rem; letter-spacing: 1px; }
+    </style>
+</head>
+<body>
+
+    <div class="ui">
+        <h3 style="margin:0">ARCHITECT DUAL-HAND</h3>
+        <p id="info">Mencari Tangan...</p>
+        <button onclick="blocks = []" style="cursor:pointer">RESET</button>
+    </div>
+
+    <div class="instruction">
+        Tangan 1: Cubit untuk TARUH BLOK | Tangan 2: Cubit untuk TARIK/GESER SEMUA
+    </div>
+
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+
+    <script>
+        const video = document.getElementById('input_video');
+        const canvas = document.getElementById('output_canvas');
+        const ctx = canvas.getContext('2d');
+        const info = document.getElementById('info');
+
+        let blocks = []; 
+        let isPinchingRight = false;
+        let offsetWorld = { x: 0, y: 0 }; // Untuk menggeser seluruh dunia
+        let lastPinchPos = { x: 0, y: 0 };
+
+        function drawCube(x, y, color, isPreview = false) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = isPreview ? 1 : 2;
+            const size = 40;
+            const shift = 15;
+
+            // Gambar kotak utama
+            ctx.strokeRect(x - size/2, y - size/2, size, size);
+            
+            // Garis perspektif 3D
+            ctx.beginPath();
+            ctx.moveTo(x - size/2, y - size/2);
+            ctx.lineTo(x - size/2 + shift, y - size/2 - shift);
+            ctx.lineTo(x + size/2 + shift, y - size/2 - shift);
+            ctx.lineTo(x + size/2, y - size/2);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(x + size/2, y - size/2);
+            ctx.lineTo(x + size/2 + shift, y - size/2 - shift);
+            ctx.lineTo(x + size/2 + shift, y + size/2 - shift);
+            ctx.lineTo(x + size/2, y + size/2);
+            ctx.stroke();
+        }
+
+        function onResults(results) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Tampilkan blok yang sudah ada dengan offset dunia
+            blocks.forEach(b => {
+                drawCube(b.x + offsetWorld.x, b.y + offsetWorld.y, "#00ffcc");
+            });
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                info.innerText = results.multiHandLandmarks.length + " Tangan Terdeteksi";
+
+                results.multiHandLandmarks.forEach((landmarks, index) => {
+                    const thumb = landmarks[4];
+                    const indexTip = landmarks[8];
+                    const x = indexTip.x * canvas.width;
+                    const y = indexTip.y * canvas.height;
+                    const distance = Math.hypot(thumb.x - indexTip.x, thumb.y - indexTip.y);
+                    const pinching = distance < 0.05;
+
+                    // Tampilkan sensor kerangka tangan
+                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#ffffff33', lineWidth: 1});
+
+                    // LOGIKA TANGAN 1 (KANAN/PERTAMA): MENARUH BLOK
+                    if (index === 0) {
+                        drawCube(x, y, "rgba(255,255,255,0.3)", true); // Preview
+                        if (pinching) {
+                            if (!isPinchingRight) {
+                                // Simpan posisi relatif terhadap offset dunia saat ini
+                                blocks.push({ x: x - offsetWorld.x, y: y - offsetWorld.y });
+                                isPinchingRight = true;
+                            }
+                        } else {
+                            isPinchingRight = false;
+                        }
+                    }
+
+                    // LOGIKA TANGAN 2 (KIRI/KEDUA): MENARIK DUNIA (PANNING)
+                    if (index === 1) {
+                        ctx.fillStyle = "#ff00ff";
+                        ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI*2); ctx.fill();
+                        
+                        if (pinching) {
+                            if (lastPinchPos.x !== 0) {
+                                offsetWorld.x += (x - lastPinchPos.x);
+                                offsetWorld.y += (y - lastPinchPos.y);
+                            }
+                            lastPinchPos = { x, y };
+                        } else {
+                            lastPinchPos = { x: 0, y: 0 };
+                        }
+                    }
+                });
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        new Camera(video, {
+            onFrame: async () => {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                await hands.send({image: video});
+            }
+        }).start();
+    </script>
+</body>
+</html>
